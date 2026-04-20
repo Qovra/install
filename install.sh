@@ -35,12 +35,12 @@ show_banner() {
   clear
   echo -e "${YELLOW}${BOLD}"
   cat << 'EOF'
-  ██████╗  ██████╗ ██╗   ██╗██████╗  █████╗ 
- ██╔═══██╗██╔═══██╗██║   ██║██╔══██╗██╔══██╗
- ██║   ██║██║   ██║██║   ██║██████╔╝███████║
- ██║▄▄ ██║██║   ██║╚██╗ ██╔╝██╔══██╗██╔══██║
- ╚██████╔╝╚██████╔╝ ╚████╔╝ ██║  ██║██║  ██║
-  ╚══▀▀═╝  ╚═════╝   ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═╝
+   ██████╗  ██████╗ ██╗   ██╗██████╗  █████╗ 
+  ██╔═══██╗██╔═══██╗██║   ██║██╔══██╗██╔══██╗
+  ██║   ██║██║   ██║██║   ██║██████╔╝███████║
+  ██║▄▄ ██║██║   ██║╚██╗ ██╔╝██╔══██╗██╔══██║
+  ╚██████╔╝╚██████╔╝ ╚████╔╝ ██║  ██║██║  ██║
+   ╚══▀▀═╝  ╚═════╝   ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═╝
 EOF
   echo -e "${NC}"
   echo -e "${CYAN}  Hytale Hosting Platform by Qovra${NC}"
@@ -234,10 +234,21 @@ NODE_IP=$(curl -s --max-time 5 https://api.ipify.org || hostname -I | awk '{prin
 NODE_HOSTNAME=$(hostname)
 NODE_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
 BACKEND_PORT=3000
-DAEMON_PORT=5000
+DAEMON_PORT=8550
 PROXY_PORT=5520
+RELEASE_TAG="v0.1.0"
 
 REPOS=("daemon" "backend" "proxy" "panel")
+
+# ── Detect system architecture ────────────────────────────────
+ARCH=$(uname -m)
+case $ARCH in
+  x86_64)  GOARCH="amd64" ;;
+  aarch64) GOARCH="arm64" ;;
+  armv7l)  GOARCH="arm"   ;;
+  *)       error "Unsupported architecture: $ARCH" ;;
+esac
+info "Detected architecture: $ARCH → $GOARCH"
 
 # =============================================================
 section "Step 1 — System update & base dependencies"
@@ -256,8 +267,9 @@ section "Step 2 — Installing Go ${GO_VERSION}"
 if command -v go &> /dev/null && go version | grep -q "$GO_VERSION"; then
   log "Go ${GO_VERSION} already installed"
 else
-  info "Downloading Go ${GO_VERSION}..."
-  wget -q "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -O /tmp/go.tar.gz
+  info "Downloading Go ${GO_VERSION} for ${GOARCH}..."
+  # FIX: use the correct architecture in the tarball name (arm64 for M1/Multipass)
+  wget -q "https://go.dev/dl/go${GO_VERSION}.linux-${GOARCH}.tar.gz" -O /tmp/go.tar.gz
   rm -rf /usr/local/go
   tar -C /usr/local -xzf /tmp/go.tar.gz
   rm /tmp/go.tar.gz
@@ -267,40 +279,29 @@ else
 fi
 
 # =============================================================
-section "Step 3 — Installing Java 25 (required for Hytale Server)"
+section "Step 3 — Installing Java 21 (required for Hytale Server)"
 # =============================================================
-if java -version 2>&1 | grep -q "25"; then
-  log "Java 25 already installed"
+if java -version 2>&1 | grep -qE "21|25"; then
+  log "Java already installed: $(java -version 2>&1 | head -1)"
 else
-  info "Adding Adoptium repository..."
-  wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public \
-    | gpg --dearmor -o /etc/apt/trusted.gpg.d/adoptium.gpg
-  echo "deb [signed-by=/etc/apt/trusted.gpg.d/adoptium.gpg] \
-https://packages.adoptium.net/artifactory/deb $(lsb_release -cs) main" \
-    > /etc/apt/sources.list.d/adoptium.list
+  info "Installing Java 21..."
   apt update -y
-  apt install -y temurin-25-jdk || {
-    warn "Java 25 not available via apt, falling back to Java 21..."
-    apt install -y openjdk-21-jre-headless
+  apt install -y openjdk-21-jre-headless || {
+    # Fallback: Adoptium for arm64
+    info "openjdk-21 not available, trying Adoptium..."
+    wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public \
+      | gpg --dearmor -o /etc/apt/trusted.gpg.d/adoptium.gpg
+    echo "deb [signed-by=/etc/apt/trusted.gpg.d/adoptium.gpg] \
+https://packages.adoptium.net/artifactory/deb $(lsb_release -cs) main" \
+      > /etc/apt/sources.list.d/adoptium.list
+    apt update -y
+    apt install -y temurin-21-jdk
   }
   log "Java installed: $(java -version 2>&1 | head -1)"
 fi
 
 # =============================================================
-section "Step 4 — Installing Node.js & pnpm (for Panel build)"
-# =============================================================
-if ! command -v node &> /dev/null; then
-  info "Installing Node.js 20 LTS..."
-  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-  apt install -y nodejs
-fi
-if ! command -v pnpm &> /dev/null; then
-  npm install -g pnpm
-fi
-log "Node $(node -v) and pnpm $(pnpm -v) ready"
-
-# =============================================================
-section "Step 5 — Installing PostgreSQL ${PG_VERSION}"
+section "Step 4 — Installing PostgreSQL ${PG_VERSION}"
 # =============================================================
 if ! command -v psql &> /dev/null; then
   info "Adding PostgreSQL repository..."
@@ -343,18 +344,24 @@ sudo -u postgres psql -c \
 log "PostgreSQL configured (user: $PG_USER / db: $PG_DB)"
 
 # =============================================================
-section "Step 6 — Installing Hytale Downloader CLI"
+section "Step 5 — Installing Hytale Downloader CLI"
 # =============================================================
 info "Downloading Hytale Downloader CLI..."
 wget -q https://downloader.hytale.com/hytale-downloader.zip -O /tmp/hytale-downloader.zip
 unzip -o /tmp/hytale-downloader.zip -d /tmp/hytale-downloader/
-chmod +x /tmp/hytale-downloader/hytale-downloader-linux-amd64
-mv /tmp/hytale-downloader/hytale-downloader-linux-amd64 /usr/local/bin/hytale-downloader
+# Pick the correct binary for this architecture
+if [ "$GOARCH" = "arm64" ]; then
+  DL_BINARY="hytale-downloader-linux-arm64"
+else
+  DL_BINARY="hytale-downloader-linux-amd64"
+fi
+chmod +x "/tmp/hytale-downloader/${DL_BINARY}"
+mv "/tmp/hytale-downloader/${DL_BINARY}" /usr/local/bin/hytale-downloader
 rm -rf /tmp/hytale-downloader /tmp/hytale-downloader.zip
 log "hytale-downloader installed → available globally as 'hytale-downloader'"
 
 # =============================================================
-section "Step 7 — Cloning repositories from github.com/${GITHUB_ORG}"
+section "Step 6 — Cloning repositories from github.com/${GITHUB_ORG}"
 # =============================================================
 mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
@@ -378,7 +385,7 @@ for REPO in "${REPOS[@]}"; do
 done
 
 # =============================================================
-section "Step 8 — Applying database schema"
+section "Step 7 — Applying database schema"
 # =============================================================
 info "Applying schema..."
 # FIX: -h localhost fuerza TCP en vez de Unix socket (evita "Peer auth failed")
@@ -498,7 +505,7 @@ SCHEMA
 log "Schema applied"
 
 # =============================================================
-section "Step 9 — Seeding database"
+section "Step 8 — Seeding database"
 # =============================================================
 info "Creating admin user and registering this node..."
 
@@ -529,23 +536,27 @@ log "Admin user '${ADMIN_USERNAME}' created"
 log "Node '${NODE_HOSTNAME}' registered (IP: ${NODE_IP}, RAM: ${NODE_RAM_MB}MB)"
 
 # =============================================================
-section "Step 10 — Generating .env configuration"
+section "Step 9 — Generating .env configuration"
 # =============================================================
 
-# .env principal (con comentarios, para lectura humana)
+# FIX: usar 'cat' en lugar de 'ccat' (ccat no es un comando estándar)
 cat > "$INSTALL_DIR/.env" << EOF
 # ── Database ──────────────────────────────────────
-PG_URL=postgresql://${PG_USER}:${PG_PASSWORD}@localhost:5432/${PG_DB}
+PG_URL=postgresql://${PG_USER}:${PG_PASSWORD}@localhost:5432/${PG_DB}?sslmode=disable
 
 # ── Auth ──────────────────────────────────────────
 JWT_SECRET=${JWT_SECRET}
 DAEMON_API_TOKEN=${DAEMON_API_TOKEN}
 
 # ── Services ──────────────────────────────────────
-BACKEND_URL=http://localhost:${BACKEND_PORT}
 PANEL_PORT=${BACKEND_PORT}
+PANEL_FRONTEND_URL=http://${NODE_IP}:${BACKEND_PORT}
+BACKEND_URL=http://localhost:${BACKEND_PORT}
 DAEMON_PORT=${DAEMON_PORT}
 PROXY_PORT=${PROXY_PORT}
+
+# ── Panel static files (React SPA dist) ───────────
+PANEL_DIST_PATH=${INSTALL_DIR}/panel/dist
 
 # ── Node identity ─────────────────────────────────
 NODE_IP=${NODE_IP}
@@ -554,6 +565,7 @@ NODE_HOSTNAME=${NODE_HOSTNAME}
 # ── Hytale paths ──────────────────────────────────
 PROXY_BINARY=/usr/local/bin/qovra-proxy
 SERVERS_PATH=${INSTALL_DIR}/servers
+PROXY_TEMPLATES_PATH=${INSTALL_DIR}/proxy/templates
 EOF
 
 # .env limpio para systemd (sin comentarios ni líneas vacías)
@@ -604,22 +616,9 @@ EOF
 log "Proxy config generated"
 
 # =============================================================
-section "Step 11 — Downloading pre-built binaries from GitHub Releases"
+section "Step 10 — Downloading pre-built binaries from GitHub Releases"
 # =============================================================
-
-RELEASE_TAG="v0.1.0"
-GITHUB_ORG="Qovra"
-
-# Detectar arquitectura del sistema
-ARCH=$(uname -m)
-case $ARCH in
-  x86_64)  GOARCH="amd64" ;;
-  aarch64) GOARCH="arm64" ;;
-  armv7l)  GOARCH="arm"   ;;
-  *)       error "Unsupported architecture: $ARCH" ;;
-esac
-
-info "Detected architecture: $ARCH → $GOARCH"
+info "Architecture: $ARCH → $GOARCH"
 
 for BINARY in backend daemon proxy; do
   BINARY_NAME="qovra-${BINARY}-linux-${GOARCH}"
@@ -634,19 +633,29 @@ for BINARY in backend daemon proxy; do
 done
 
 # =============================================================
-section "Step 12 — Building Panel (React)"
+section "Step 11 — Downloading pre-built Panel (React)"
 # =============================================================
-cd "$INSTALL_DIR/panel"
-pnpm install --frozen-lockfile
-pnpm build
-log "Panel built → $INSTALL_DIR/panel/dist"
+# FIX: descargamos el panel desde GitHub Releases en lugar de compilarlo
+# en el VPS. Esto es más rápido, reproducible y evita instalar Node/pnpm.
+PANEL_URL="https://github.com/${GITHUB_ORG}/panel/releases/download/${RELEASE_TAG}/qovra-panel.tar.gz"
+PANEL_DIST="$INSTALL_DIR/panel/dist"
+
+info "Downloading pre-built panel from GitHub Releases..."
+mkdir -p "$PANEL_DIST"
+wget -q "$PANEL_URL" -O /tmp/qovra-panel.tar.gz \
+  || error "Failed to download panel from $PANEL_URL"
+
+info "Extracting panel to $PANEL_DIST..."
+tar -xzf /tmp/qovra-panel.tar.gz -C "$PANEL_DIST"
+rm -f /tmp/qovra-panel.tar.gz
+log "Panel extracted → $PANEL_DIST"
 
 # =============================================================
-section "Step 13 — Installing systemd services"
+section "Step 12 — Installing systemd services"
 # =============================================================
 cat > /etc/systemd/system/qovra-backend.service << EOF
 [Unit]
-Description=Qovra Backend (Orchestrator)
+Description=Qovra Backend (Orchestrator + Panel)
 After=network.target postgresql.service
 Requires=postgresql.service
 
@@ -712,19 +721,19 @@ systemctl start  qovra-backend qovra-daemon qovra-proxy
 log "All services installed and started"
 
 # =============================================================
-section "Step 14 — Configuring firewall (UFW)"
+section "Step 13 — Configuring firewall (UFW)"
 # =============================================================
 ufw default deny incoming
 ufw default allow outgoing
 ufw allow 22/tcp               comment 'SSH'
-ufw allow ${BACKEND_PORT}/tcp  comment 'Qovra Backend API'
+ufw allow ${BACKEND_PORT}/tcp  comment 'Qovra Backend API + Panel'
 ufw allow ${DAEMON_PORT}/tcp   comment 'Qovra Daemon API'
 ufw allow ${PROXY_PORT}/udp    comment 'Hytale Proxy QUIC'
 ufw --force enable
 log "Firewall configured"
 
 # =============================================================
-section "Step 15 — Verifying services"
+section "Step 14 — Verifying services"
 # =============================================================
 sleep 3
 ALL_OK=true
@@ -749,7 +758,8 @@ echo -e "${GREEN}${BOLD}╚═════════════════�
 echo ""
 echo -e "  📁 Install dir:      ${YELLOW}${INSTALL_DIR}${NC}"
 echo -e "  🌐 Node IP:          ${YELLOW}${NODE_IP}${NC}"
-echo -e "  🖥️  Panel API:        ${YELLOW}http://${NODE_IP}:${BACKEND_PORT}${NC}"
+echo -e "  🖥️  Panel Web UI:     ${YELLOW}http://${NODE_IP}:${BACKEND_PORT}/${NC}"
+echo -e "  🔌 Backend API:      ${YELLOW}http://${NODE_IP}:${BACKEND_PORT}/api/${NC}"
 echo -e "  ⚙️  Daemon API:       ${YELLOW}http://localhost:${DAEMON_PORT}${NC}"
 echo -e "  🎮 Proxy (QUIC):     ${YELLOW}UDP ${PROXY_PORT}${NC}"
 echo -e "  👤 Admin user:       ${YELLOW}${ADMIN_USERNAME} (${ADMIN_EMAIL})${NC}"
@@ -768,6 +778,7 @@ echo -e "${YELLOW}  Useful commands:${NC}"
 echo -e "    systemctl status qovra-backend"
 echo -e "    systemctl status qovra-daemon"
 echo -e "    systemctl status qovra-proxy"
+echo -e "    journalctl -u qovra-backend -f"
 echo -e "    journalctl -u qovra-daemon -f"
 echo -e "    hytale-downloader --help"
 echo ""
