@@ -291,7 +291,7 @@ if ! command -v psql &> /dev/null; then
     | gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
   echo "deb [signed-by=/etc/apt/trusted.gpg.d/postgresql.gpg] \
 http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
-    > /etc/apt/sources.list.d/pgdg.list
+    > /etc/apt/sources list.d/pgdg.list
   apt update -y
   apt install -y postgresql-$PG_VERSION
   log "PostgreSQL ${PG_VERSION} installed"
@@ -300,6 +300,20 @@ else
 fi
 
 systemctl enable --now postgresql
+
+# ── Ensure pg_hba.conf allows password auth over localhost ────
+PG_HBA=$(sudo -u postgres psql -t -P format=unaligned -c "SHOW hba_file;")
+info "pg_hba.conf location: $PG_HBA"
+
+# Add a host entry for the qovra user if not already present
+if ! grep -q "^host.*${PG_DB}.*${PG_USER}.*127.0.0.1" "$PG_HBA" 2>/dev/null; then
+  # Insert before the first "host" line so it takes priority
+  sed -i "/^host/i host    ${PG_DB}    ${PG_USER}    127.0.0.1/32    scram-sha-256" "$PG_HBA"
+  sed -i "/^host/i host    ${PG_DB}    ${PG_USER}    ::1/128          scram-sha-256" "$PG_HBA"
+  systemctl reload postgresql
+  log "pg_hba.conf updated for password auth"
+fi
+
 sudo -u postgres psql -c \
   "CREATE USER $PG_USER WITH PASSWORD '$PG_PASSWORD';" 2>/dev/null \
   || warn "User $PG_USER already exists"
@@ -376,7 +390,7 @@ log "Panel ready → $INSTALL_DIR/panel"
 section "Step 8 — Applying database schema"
 # =============================================================
 info "Applying schema..."
-PGPASSWORD=$PG_PASSWORD psql -U $PG_USER -d $PG_DB << 'SCHEMA'
+PGPASSWORD=$PG_PASSWORD psql -h localhost -U $PG_USER -d $PG_DB << 'SCHEMA'
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 CREATE TYPE user_role AS ENUM ('admin', 'staff', 'customer');
@@ -500,7 +514,7 @@ SAFE_PASSWORD="${ADMIN_PASSWORD//\'/\'\'}"
 SAFE_USERNAME="${ADMIN_USERNAME//\'/\'\'}"
 SAFE_EMAIL="${ADMIN_EMAIL//\'/\'\'}"
 
-PGPASSWORD=$PG_PASSWORD psql -U $PG_USER -d $PG_DB << SEED
+PGPASSWORD=$PG_PASSWORD psql -h localhost -U $PG_USER -d $PG_DB << SEED
 INSERT INTO users (username, email, password, role)
 VALUES (
     '${SAFE_USERNAME}',
