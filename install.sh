@@ -259,6 +259,10 @@ apt install -y \
   software-properties-common \
   build-essential ca-certificates \
   lsb-release gnupg
+if [ "$GOARCH" = "arm64" ]; then
+  apt install -y qemu-user-static binfmt-support || true
+  log "qemu-user-static installed for amd64 emulation on arm64"
+fi
 log "Base dependencies installed"
 
 # =============================================================
@@ -349,14 +353,11 @@ section "Step 5 — Installing Hytale Downloader CLI"
 info "Downloading Hytale Downloader CLI..."
 wget -q https://downloader.hytale.com/hytale-downloader.zip -O /tmp/hytale-downloader.zip
 unzip -o /tmp/hytale-downloader.zip -d /tmp/hytale-downloader/
-# Pick the correct binary for this architecture
-if [ "$GOARCH" = "arm64" ]; then
-  DL_BINARY="hytale-downloader-linux-arm64"
-else
-  DL_BINARY="hytale-downloader-linux-amd64"
-fi
-chmod +x "/tmp/hytale-downloader/${DL_BINARY}"
-mv "/tmp/hytale-downloader/${DL_BINARY}" /usr/local/bin/hytale-downloader
+
+# The Hytale Downloader zip only ships linux-amd64 — always use that binary
+# On arm64 hosts it runs via the kernel's binfmt_misc / qemu-user-static layer
+chmod +x /tmp/hytale-downloader/hytale-downloader-linux-amd64
+mv /tmp/hytale-downloader/hytale-downloader-linux-amd64 /usr/local/bin/hytale-downloader
 rm -rf /tmp/hytale-downloader /tmp/hytale-downloader.zip
 log "hytale-downloader installed → available globally as 'hytale-downloader'"
 
