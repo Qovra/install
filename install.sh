@@ -363,9 +363,13 @@ for REPO in "${REPOS[@]}"; do
   TARGET_DIR="$INSTALL_DIR/$REPO"
   if [ -d "$TARGET_DIR/.git" ]; then
     info "$REPO already exists — pulling latest..."
-    # FIX: || true so set -e doesn't abort if pull fails (e.g. detached HEAD)
     git -C "$TARGET_DIR" pull || warn "Could not pull $REPO, continuing with existing version"
   else
+    # El directorio existe pero NO es un repo Git válido → limpiarlo
+    if [ -d "$TARGET_DIR" ]; then
+      warn "$REPO directory exists but is not a valid Git repo — removing it..."
+      rm -rf "$TARGET_DIR"
+    fi
     info "Cloning $REPO..."
     git clone "https://github.com/$GITHUB_ORG/$REPO.git" "$TARGET_DIR" \
       || error "Failed to clone $REPO from github.com/$GITHUB_ORG/$REPO"
