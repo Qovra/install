@@ -236,7 +236,7 @@ GO_VERSION="1.22.4"
 PG_VERSION="16"
 PG_USER="qovra"
 PG_DB="qovra"
-INSTALLER_VERSION="0.1.1"
+INSTALLER_VERSION="${INSTALLER_VERSION:-0.1.1}"
 REPOS=("daemon" "backend" "proxy" "panel")
 
 if [ "${REPAIR_CLI_ONLY:-false}" = "false" ]; then
@@ -740,8 +740,8 @@ cmd_self_update() {
 
   _info "Re-generating CLI from new installer..."
   # Extraer y ejecutar solo la parte que genera el CLI,
-  # pasando la bandera de repair para no re-instalar servicios.
-  REPAIR_CLI_ONLY=true bash /tmp/qovra-install-new.sh 2>/dev/null \
+  # pasando la bandera de repair y el version tag dinámico.
+  REPAIR_CLI_ONLY=true INSTALLER_VERSION="${latest#v}" bash /tmp/qovra-install-new.sh 2>/dev/null \
     || _error "Failed to regenerate CLI from new installer."
 
   rm -f /tmp/qovra-install-new.sh
