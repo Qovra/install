@@ -446,9 +446,12 @@ cmd_status() {
 
   _svc_line "qovra-backend" "backend"
   _svc_line "qovra-daemon"  "daemon"
-  _svc_line "qovra-proxy"   "proxy"
-
-  # Panel: no tiene servicio propio
+  
+  # Proxy: now managed natively by Daemon
+  local proxy_ver
+  proxy_ver=$(_get_version "proxy")
+  printf "  ${CYAN}${BOLD}%-10s${NC}  %-10s  ${DIM}v%-12s${NC}  ${DIM}%s${NC}\n" \
+    "◈ managed " "proxy" "${proxy_ver}" "(managed by daemon)"
   local panel_ver
   panel_ver=$(_get_version "panel")
   printf "  ${CYAN}${BOLD}%-10s${NC}  %-10s  ${DIM}%-14s${NC}  ${DIM}%s${NC}\n" \
@@ -671,13 +674,22 @@ _update_binary() {
   wget -q "${url}" -O "${dest}.tmp" \
     || { _warn "Failed to download ${comp} from ${url}"; rm -f "${dest}.tmp"; return 1; }
 
-  # Detener servicio, reemplazar, reiniciar
+  # Stop service if it's not proxy (proxy is daemon managed)
   local svc="qovra-${comp}"
-  _info "Restarting ${svc}..."
-  systemctl stop "${svc}"  2>/dev/null || true
+  if [ "${comp}" != "proxy" ]; then
+    _info "Restarting ${svc}..."
+    systemctl stop "${svc}"  2>/dev/null || true
+  fi
+
   mv "${dest}.tmp" "${dest}"
   chmod +x "${dest}"
-  systemctl start "${svc}" 2>/dev/null || _warn "${svc} failed to start — check: journalctl -u ${svc} -n 50"
+
+  if [ "${comp}" != "proxy" ]; then
+    systemctl start "${svc}" 2>/dev/null || _warn "${svc} failed to start — check: journalctl -u ${svc} -n 50"
+  else
+    _info "Restarting daemon to apply new proxy binary..."
+    systemctl restart qovra-daemon 2>/dev/null || true
+  fi
 
   # Register new version
   sed -i "/^${comp}=/d" "${VERSIONS_FILE}" 2>/dev/null || true
