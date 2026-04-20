@@ -414,6 +414,7 @@ BANNER
   printf "    ${CYAN}%-22s${NC} %s\n" "check-update"    "Check for available updates"
   printf "    ${CYAN}%-22s${NC} %s\n" "update <target>" "Update a component (or all)"
   printf "    ${CYAN}%-22s${NC} %s\n" "self-update"     "Update the Qovra CLI itself"
+  printf "    ${CYAN}%-22s${NC} %s\n" "reload"          "Restart background services"
   echo ""
   echo -e "  ${BOLD}UPDATE TARGETS${NC}"
   echo ""
@@ -706,6 +707,30 @@ _update_panel() {
 }
 
 # =============================================================
+# COMMAND: reload
+# =============================================================
+cmd_reload() {
+  if [ "${EUID:-$(id -u)}" -ne 0 ]; then
+    _error "qovra reload requires root. Run: sudo qovra reload"
+  fi
+
+  _section "Reloading Qovra Services"
+  echo ""
+  
+  _info "Restarting qovra-backend..."
+  systemctl restart qovra-backend 2>/dev/null || _warn "Failed to restart qovra-backend"
+  
+  _info "Restarting qovra-daemon..."
+  systemctl restart qovra-daemon 2>/dev/null || _warn "Failed to restart qovra-daemon"
+  
+  # Note: qovra-proxy is natively managed by Daemon, no systemctl interaction needed for it
+  
+  echo ""
+  _log "Services reloaded successfully."
+  echo ""
+}
+
+# =============================================================
 # COMMAND: self-update
 # =============================================================
 cmd_self_update() {
@@ -763,6 +788,7 @@ case "${CMD}" in
   check-update)    cmd_check_update ;;
   update)          cmd_update "${1:-}" ;;
   self-update)     cmd_self_update ;;
+  reload)          cmd_reload ;;
   *)
     echo ""
     _error "Unknown command '${CMD}'. Run 'qovra help' for usage."
