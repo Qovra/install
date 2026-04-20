@@ -677,6 +677,10 @@ _update_binary() {
   mv "${dest}.tmp" "${dest}"
   chmod +x "${dest}"
   systemctl start "${svc}" 2>/dev/null || _warn "${svc} failed to start — check: journalctl -u ${svc} -n 50"
+
+  # Register new version
+  sed -i "/^${comp}=/d" "${VERSIONS_FILE}" 2>/dev/null || true
+  echo "${comp}=${tag#v}" >> "${VERSIONS_FILE}"
 }
 
 _update_panel() {
@@ -692,6 +696,10 @@ _update_panel() {
   rm -rf "${panel_dist:?}"/*
   tar -xzf /tmp/qovra-panel-update.tar.gz -C "${panel_dist}"
   rm -f /tmp/qovra-panel-update.tar.gz
+
+  # Register new version
+  sed -i "/^panel=/d" "${VERSIONS_FILE}" 2>/dev/null || true
+  echo "panel=${tag#v}" >> "${VERSIONS_FILE}"
 
   # Recargar backend para que sirva los archivos nuevos
   systemctl restart qovra-backend 2>/dev/null || true
