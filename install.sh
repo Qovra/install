@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================
 #  Qovra - Hytale Hosting Platform
-#  Installer v0.1.0-alpha
+#  Installer v0.1.0
 #
 #  ⚠️  ALPHA SOFTWARE - NOT FOR PRODUCTION USE
 #
@@ -564,7 +564,7 @@ log ".env generated and distributed"
 section "Step 11 — Downloading pre-built binaries from GitHub Releases"
 # =============================================================
 
-RELEASE_TAG="v0.1.0"  # Cambiá esto si usás otro tag
+RELEASE_TAG="v0.1.0"
 GITHUB_ORG="Qovra"
 
 # Detectar arquitectura del sistema
