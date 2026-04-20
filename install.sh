@@ -236,7 +236,7 @@ GO_VERSION="1.22.4"
 PG_VERSION="16"
 PG_USER="qovra"
 PG_DB="qovra"
-INSTALLER_VERSION="0.1.0"
+INSTALLER_VERSION="0.1.1"
 REPOS=("daemon" "backend" "proxy" "panel")
 
 if [ "${REPAIR_CLI_ONLY:-false}" = "false" ]; then
