@@ -561,30 +561,34 @@ mkdir -p "$INSTALL_DIR/servers"
 log ".env generated and distributed"
 
 # =============================================================
-section "Step 11 — Building Go binaries"
+section "Step 11 — Downloading pre-built binaries from GitHub Releases"
 # =============================================================
-export PATH=$PATH:/usr/local/go/bin
 
-info "Building backend..."
-cd "$INSTALL_DIR/backend"
-go build -o /usr/local/bin/qovra-backend .
-log "qovra-backend built"
+RELEASE_TAG="v0.1.0-alpha"  # Cambiá esto si usás otro tag
+GITHUB_ORG="Qovra"
 
-info "Building daemon..."
-cd "$INSTALL_DIR/daemon"
-go build -o /usr/local/bin/qovra-daemon .
-log "qovra-daemon built"
+# Detectar arquitectura del sistema
+ARCH=$(uname -m)
+case $ARCH in
+  x86_64)  GOARCH="amd64" ;;
+  aarch64) GOARCH="arm64" ;;
+  armv7l)  GOARCH="arm"   ;;
+  *)       error "Unsupported architecture: $ARCH" ;;
+esac
 
-info "Building proxy..."
-cd "$INSTALL_DIR/proxy"
-# FIX: detectar si existe ./cmd/proxy/, si no compilar desde raíz
-# El original tenía "./cmd/proxy/." con punto extra que causaba error
-if [ -d "./cmd/proxy" ]; then
-  go build -o /usr/local/bin/qovra-proxy ./cmd/proxy/
-else
-  go build -o /usr/local/bin/qovra-proxy .
-fi
-log "qovra-proxy built"
+info "Detected architecture: $ARCH → $GOARCH"
+
+for BINARY in backend daemon proxy; do
+  BINARY_NAME="qovra-${BINARY}-linux-${GOARCH}"
+  DOWNLOAD_URL="https://github.com/${GITHUB_ORG}/${BINARY}/releases/download/${RELEASE_TAG}/${BINARY_NAME}"
+
+  info "Downloading qovra-${BINARY}..."
+  wget -q "$DOWNLOAD_URL" -O "/usr/local/bin/qovra-${BINARY}" \
+    || error "Failed to download $BINARY from $DOWNLOAD_URL"
+
+  chmod +x "/usr/local/bin/qovra-${BINARY}"
+  log "qovra-${BINARY} installed"
+done
 
 # =============================================================
 section "Step 12 — Building Panel (React)"
