@@ -533,7 +533,7 @@ section "Step 10 — Generating .env configuration"
 # =============================================================
 cat > "$INSTALL_DIR/.env" << EOF
 # ── Database ──────────────────────────────────────
-DB_URL=postgresql://${PG_USER}:${PG_PASSWORD}@localhost:5432/${PG_DB}
+PG_URL=postgresql://${PG_USER}:${PG_PASSWORD}@localhost:5432/${PG_DB}
 
 # ── Auth ──────────────────────────────────────────
 JWT_SECRET=${JWT_SECRET}
@@ -559,6 +559,44 @@ cp "$INSTALL_DIR/.env" "$INSTALL_DIR/daemon/.env"
 cp "$INSTALL_DIR/.env" "$INSTALL_DIR/proxy/.env"
 mkdir -p "$INSTALL_DIR/servers"
 log ".env generated and distributed"
+
+# Generar config del proxy
+mkdir -p "$INSTALL_DIR/proxy/config"
+cat > "$INSTALL_DIR/proxy/config/config.json" << EOF
+{
+    "listen": ":${PROXY_PORT}",
+    "session_timeout": 7200,
+    "metrics_listen": ":9090",
+    "handlers": [
+        {
+            "type": "ip-ratelimit",
+            "config": {
+                "max_conns_per_ip": 10,
+                "refill_per_sec": 1
+            }
+        },
+        {
+            "type": "ip-connlimit",
+            "config": {
+                "max_conns_per_ip": 5,
+                "burst": 3
+            }
+        },
+        {
+            "type": "sni-router",
+            "config": {
+                "routes": {
+                    "localhost": ["127.0.0.1:5520", "127.0.0.1:5522"]
+                }
+            }
+        },
+        {
+            "type": "forwarder"
+        }
+    ]
+}
+EOF
+log "Proxy config generated"
 
 # =============================================================
 section "Step 11 — Downloading pre-built binaries from GitHub Releases"
@@ -653,7 +691,7 @@ Type=simple
 User=root
 WorkingDirectory=${INSTALL_DIR}/proxy
 EnvironmentFile=${INSTALL_DIR}/proxy/.env
-ExecStart=/usr/local/bin/qovra-proxy
+ExecStart=/usr/local/bin/qovra-proxy -config ${INSTALL_DIR}/proxy/config/config.json
 Restart=always
 RestartSec=5
 StartLimitIntervalSec=60
