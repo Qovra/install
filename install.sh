@@ -531,6 +531,8 @@ log "Node '${NODE_HOSTNAME}' registered (IP: ${NODE_IP}, RAM: ${NODE_RAM_MB}MB)"
 # =============================================================
 section "Step 10 — Generating .env configuration"
 # =============================================================
+
+# .env principal (con comentarios, para lectura humana)
 cat > "$INSTALL_DIR/.env" << EOF
 # ── Database ──────────────────────────────────────
 PG_URL=postgresql://${PG_USER}:${PG_PASSWORD}@localhost:5432/${PG_DB}
@@ -554,9 +556,12 @@ PROXY_BINARY=/usr/local/bin/qovra-proxy
 SERVERS_PATH=${INSTALL_DIR}/servers
 EOF
 
-cp "$INSTALL_DIR/.env" "$INSTALL_DIR/backend/.env"
-cp "$INSTALL_DIR/.env" "$INSTALL_DIR/daemon/.env"
-cp "$INSTALL_DIR/.env" "$INSTALL_DIR/proxy/.env"
+# .env limpio para systemd (sin comentarios ni líneas vacías)
+grep -v '^#' "$INSTALL_DIR/.env" | grep -v '^$' > "$INSTALL_DIR/.env.service"
+cp "$INSTALL_DIR/.env.service" "$INSTALL_DIR/backend/.env"
+cp "$INSTALL_DIR/.env.service" "$INSTALL_DIR/daemon/.env"
+cp "$INSTALL_DIR/.env.service" "$INSTALL_DIR/proxy/.env"
+
 mkdir -p "$INSTALL_DIR/servers"
 log ".env generated and distributed"
 
