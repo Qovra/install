@@ -853,22 +853,25 @@ else
 fi
 
 # =============================================================
-section "Step 3 — Installing Java 21 (required for Hytale Server)"
+section "Step 3 — Installing Java 25 (required for Hytale Server)"
 # =============================================================
-if java -version 2>&1 | grep -qE "21|25"; then
+if java -version 2>&1 | grep -qE "25"; then
   log "Java already installed: $(java -version 2>&1 | head -1)"
 else
-  info "Installing Java 21..."
+  info "Installing Java 25..."
   apt update -y
-  apt install -y openjdk-21-jre-headless || {
-    info "openjdk-21 not available, trying Adoptium..."
+  apt install -y openjdk-25-jre-headless || {
+    info "openjdk-25 not available, trying Adoptium..."
     wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public \
       | gpg --dearmor -o /etc/apt/trusted.gpg.d/adoptium.gpg
     echo "deb [signed-by=/etc/apt/trusted.gpg.d/adoptium.gpg] \
 https://packages.adoptium.net/artifactory/deb $(lsb_release -cs) main" \
       > /etc/apt/sources.list.d/adoptium.list
     apt update -y
-    apt install -y temurin-21-jdk
+    apt install -y temurin-25-jdk || {
+        warn "Java 25 not found, falling back to Java 21..."
+        apt install -y openjdk-21-jre-headless
+    }
   }
   log "Java installed: $(java -version 2>&1 | head -1)"
 fi
