@@ -62,21 +62,6 @@ is_installed() {
   [ -d "$INSTALL_DIR" ] && [ -f "$INSTALL_DIR/.env" ]
 }
 
-# ── Resolve latest release version for a given repo ──────────
-get_latest_version() {
-  curl -s "https://api.github.com/repos/Qovra/$1/releases/latest" \
-    | grep '"tag_name"' | cut -d'"' -f4
-}
-
-# ── Detect architecture ───────────────────────────────────────
-detect_arch() {
-  case "$(uname -m)" in
-    x86_64)  echo "amd64" ;;
-    aarch64) echo "arm64" ;;
-    *) error "Unsupported architecture: $(uname -m)" ;;
-  esac
-}
-
 # =============================================================
 # MAIN MENU
 # =============================================================
@@ -238,7 +223,7 @@ log "Admin account details collected"
 
 # ── Configuration ─────────────────────────────────────────────
 GITHUB_ORG="Qovra"
-ARCH=$(detect_arch)
+GO_VERSION="1.22.4"
 PG_VERSION="16"
 PG_USER="qovra"
 PG_DB="qovra"
@@ -252,18 +237,37 @@ BACKEND_PORT=3000
 DAEMON_PORT=5000
 PROXY_PORT=5520
 
+REPOS=("daemon" "backend" "proxy" "panel")
+
 # =============================================================
 section "Step 1 — System update & base dependencies"
 # =============================================================
 apt update -y && apt upgrade -y
 apt install -y \
-  curl wget ufw openssl unzip \
+  curl wget git ufw openssl unzip \
   software-properties-common \
-  ca-certificates lsb-release gnupg
+  build-essential ca-certificates \
+  lsb-release gnupg
 log "Base dependencies installed"
 
 # =============================================================
-section "Step 2 — Installing Java 25 (required for Hytale Server)"
+section "Step 2 — Installing Go ${GO_VERSION}"
+# =============================================================
+if command -v go &> /dev/null && go version | grep -q "$GO_VERSION"; then
+  log "Go ${GO_VERSION} already installed"
+else
+  info "Downloading Go ${GO_VERSION}..."
+  wget -q "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -O /tmp/go.tar.gz
+  rm -rf /usr/local/go
+  tar -C /usr/local -xzf /tmp/go.tar.gz
+  rm /tmp/go.tar.gz
+  echo 'export PATH=$PATH:/usr/local/go/bin' >> /etc/profile
+  export PATH=$PATH:/usr/local/go/bin
+  log "Go ${GO_VERSION} installed"
+fi
+
+# =============================================================
+section "Step 3 — Installing Java 25 (required for Hytale Server)"
 # =============================================================
 if java -version 2>&1 | grep -q "25"; then
   log "Java 25 already installed"
@@ -283,7 +287,20 @@ https://packages.adoptium.net/artifactory/deb $(lsb_release -cs) main" \
 fi
 
 # =============================================================
-section "Step 3 — Installing PostgreSQL ${PG_VERSION}"
+section "Step 4 — Installing Node.js & pnpm (for Panel build)"
+# =============================================================
+if ! command -v node &> /dev/null; then
+  info "Installing Node.js 20 LTS..."
+  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+  apt install -y nodejs
+fi
+if ! command -v pnpm &> /dev/null; then
+  npm install -g pnpm
+fi
+log "Node $(node -v) and pnpm $(pnpm -v) ready"
+
+# =============================================================
+section "Step 5 — Installing PostgreSQL ${PG_VERSION}"
 # =============================================================
 if ! command -v psql &> /dev/null; then
   info "Adding PostgreSQL repository..."
@@ -291,7 +308,7 @@ if ! command -v psql &> /dev/null; then
     | gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
   echo "deb [signed-by=/etc/apt/trusted.gpg.d/postgresql.gpg] \
 http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
-    > /etc/apt/sources list.d/pgdg.list
+    > /etc/apt/sources.list.d/pgdg.list
   apt update -y
   apt install -y postgresql-$PG_VERSION
   log "PostgreSQL ${PG_VERSION} installed"
@@ -301,13 +318,13 @@ fi
 
 systemctl enable --now postgresql
 
-# ── Ensure pg_hba.conf allows password auth over localhost ────
+# ── FIX: Garantizar autenticación por contraseña vía TCP ─────
+# Por defecto pg_hba.conf usa "peer" auth en socket Unix, lo que falla
+# cuando el script corre como root pero el usuario de BD es "qovra".
+# Agregamos reglas "scram-sha-256" para conexiones TCP a localhost.
 PG_HBA=$(sudo -u postgres psql -t -P format=unaligned -c "SHOW hba_file;")
-info "pg_hba.conf location: $PG_HBA"
-
-# Add a host entry for the qovra user if not already present
-if ! grep -q "^host.*${PG_DB}.*${PG_USER}.*127.0.0.1" "$PG_HBA" 2>/dev/null; then
-  # Insert before the first "host" line so it takes priority
+info "pg_hba.conf: $PG_HBA"
+if ! grep -qE "^host[[:space:]]+${PG_DB}[[:space:]]+${PG_USER}" "$PG_HBA" 2>/dev/null; then
   sed -i "/^host/i host    ${PG_DB}    ${PG_USER}    127.0.0.1/32    scram-sha-256" "$PG_HBA"
   sed -i "/^host/i host    ${PG_DB}    ${PG_USER}    ::1/128          scram-sha-256" "$PG_HBA"
   systemctl reload postgresql
@@ -317,13 +334,16 @@ fi
 sudo -u postgres psql -c \
   "CREATE USER $PG_USER WITH PASSWORD '$PG_PASSWORD';" 2>/dev/null \
   || warn "User $PG_USER already exists"
+# Siempre actualizar la contraseña por si el usuario ya existía con otra
+sudo -u postgres psql -c \
+  "ALTER USER $PG_USER WITH PASSWORD '$PG_PASSWORD';" 2>/dev/null || true
 sudo -u postgres psql -c \
   "CREATE DATABASE $PG_DB OWNER $PG_USER;" 2>/dev/null \
   || warn "Database $PG_DB already exists"
 log "PostgreSQL configured (user: $PG_USER / db: $PG_DB)"
 
 # =============================================================
-section "Step 4 — Installing Hytale Downloader CLI"
+section "Step 6 — Installing Hytale Downloader CLI"
 # =============================================================
 info "Downloading Hytale Downloader CLI..."
 wget -q https://downloader.hytale.com/hytale-downloader.zip -O /tmp/hytale-downloader.zip
@@ -334,62 +354,30 @@ rm -rf /tmp/hytale-downloader /tmp/hytale-downloader.zip
 log "hytale-downloader installed → available globally as 'hytale-downloader'"
 
 # =============================================================
-section "Step 5 — Resolving latest release versions"
-# =============================================================
-info "Fetching latest versions from GitHub..."
-BACKEND_VERSION=$(get_latest_version "backend")
-DAEMON_VERSION=$(get_latest_version "daemon")
-PROXY_VERSION=$(get_latest_version "proxy")
-PANEL_VERSION=$(get_latest_version "panel")
-
-[[ -z "$BACKEND_VERSION" ]] && error "Could not resolve backend version"
-[[ -z "$DAEMON_VERSION"  ]] && error "Could not resolve daemon version"
-[[ -z "$PROXY_VERSION"   ]] && error "Could not resolve proxy version"
-[[ -z "$PANEL_VERSION"   ]] && error "Could not resolve panel version"
-
-log "backend  → ${BACKEND_VERSION}"
-log "daemon   → ${DAEMON_VERSION}"
-log "proxy    → ${PROXY_VERSION}"
-log "panel    → ${PANEL_VERSION}"
-log "arch     → ${ARCH}"
-
-# =============================================================
-section "Step 6 — Downloading binaries"
+section "Step 7 — Cloning repositories from github.com/${GITHUB_ORG}"
 # =============================================================
 mkdir -p "$INSTALL_DIR"
+cd "$INSTALL_DIR"
 
-download_binary() {
-  local REPO=$1
-  local VERSION=$2
-  local BINARY_NAME=$3
-  local DEST=$4
-
-  local URL="https://github.com/${GITHUB_ORG}/${REPO}/releases/download/${VERSION}/${BINARY_NAME}-linux-${ARCH}"
-  info "Downloading ${BINARY_NAME} ${VERSION}..."
-  wget -q "$URL" -O "$DEST" || error "Failed to download ${BINARY_NAME} from ${URL}"
-  chmod +x "$DEST"
-  log "${BINARY_NAME} ready"
-}
-
-download_binary "backend" "$BACKEND_VERSION" "qovra-backend" "/usr/local/bin/qovra-backend"
-download_binary "daemon"  "$DAEMON_VERSION"  "qovra-daemon"  "/usr/local/bin/qovra-daemon"
-download_binary "proxy"   "$PROXY_VERSION"   "qovra-proxy"   "/usr/local/bin/qovra-proxy"
-
-# =============================================================
-section "Step 7 — Downloading Panel"
-# =============================================================
-info "Downloading panel ${PANEL_VERSION}..."
-mkdir -p "$INSTALL_DIR/panel"
-wget -q "https://github.com/${GITHUB_ORG}/panel/releases/download/${PANEL_VERSION}/qovra-panel.tar.gz" \
-  -O /tmp/qovra-panel.tar.gz || error "Failed to download panel"
-tar -xzf /tmp/qovra-panel.tar.gz -C "$INSTALL_DIR/panel"
-rm /tmp/qovra-panel.tar.gz
-log "Panel ready → $INSTALL_DIR/panel"
+for REPO in "${REPOS[@]}"; do
+  TARGET_DIR="$INSTALL_DIR/$REPO"
+  if [ -d "$TARGET_DIR/.git" ]; then
+    info "$REPO already exists — pulling latest..."
+    # FIX: || true so set -e doesn't abort if pull fails (e.g. detached HEAD)
+    git -C "$TARGET_DIR" pull || warn "Could not pull $REPO, continuing with existing version"
+  else
+    info "Cloning $REPO..."
+    git clone "https://github.com/$GITHUB_ORG/$REPO.git" "$TARGET_DIR" \
+      || error "Failed to clone $REPO from github.com/$GITHUB_ORG/$REPO"
+  fi
+  log "$REPO ready"
+done
 
 # =============================================================
 section "Step 8 — Applying database schema"
 # =============================================================
 info "Applying schema..."
+# FIX: -h localhost fuerza TCP en vez de Unix socket (evita "Peer auth failed")
 PGPASSWORD=$PG_PASSWORD psql -h localhost -U $PG_USER -d $PG_DB << 'SCHEMA'
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
@@ -514,6 +502,7 @@ SAFE_PASSWORD="${ADMIN_PASSWORD//\'/\'\'}"
 SAFE_USERNAME="${ADMIN_USERNAME//\'/\'\'}"
 SAFE_EMAIL="${ADMIN_EMAIL//\'/\'\'}"
 
+# FIX: -h localhost fuerza TCP en vez de Unix socket (evita "Peer auth failed")
 PGPASSWORD=$PG_PASSWORD psql -h localhost -U $PG_USER -d $PG_DB << SEED
 INSERT INTO users (username, email, password, role)
 VALUES (
@@ -538,8 +527,6 @@ log "Node '${NODE_HOSTNAME}' registered (IP: ${NODE_IP}, RAM: ${NODE_RAM_MB}MB)"
 # =============================================================
 section "Step 10 — Generating .env configuration"
 # =============================================================
-mkdir -p "$INSTALL_DIR/servers"
-
 cat > "$INSTALL_DIR/.env" << EOF
 # ── Database ──────────────────────────────────────
 DB_URL=postgresql://${PG_USER}:${PG_PASSWORD}@localhost:5432/${PG_DB}
@@ -561,18 +548,50 @@ NODE_HOSTNAME=${NODE_HOSTNAME}
 # ── Hytale paths ──────────────────────────────────
 PROXY_BINARY=/usr/local/bin/qovra-proxy
 SERVERS_PATH=${INSTALL_DIR}/servers
-
-# ── Versions ──────────────────────────────────────
-BACKEND_VERSION=${BACKEND_VERSION}
-DAEMON_VERSION=${DAEMON_VERSION}
-PROXY_VERSION=${PROXY_VERSION}
-PANEL_VERSION=${PANEL_VERSION}
 EOF
 
-log ".env generated"
+cp "$INSTALL_DIR/.env" "$INSTALL_DIR/backend/.env"
+cp "$INSTALL_DIR/.env" "$INSTALL_DIR/daemon/.env"
+cp "$INSTALL_DIR/.env" "$INSTALL_DIR/proxy/.env"
+mkdir -p "$INSTALL_DIR/servers"
+log ".env generated and distributed"
 
 # =============================================================
-section "Step 11 — Installing systemd services"
+section "Step 11 — Building Go binaries"
+# =============================================================
+export PATH=$PATH:/usr/local/go/bin
+
+info "Building backend..."
+cd "$INSTALL_DIR/backend"
+go build -o /usr/local/bin/qovra-backend .
+log "qovra-backend built"
+
+info "Building daemon..."
+cd "$INSTALL_DIR/daemon"
+go build -o /usr/local/bin/qovra-daemon .
+log "qovra-daemon built"
+
+info "Building proxy..."
+cd "$INSTALL_DIR/proxy"
+# FIX: detectar si existe ./cmd/proxy/, si no compilar desde raíz
+# El original tenía "./cmd/proxy/." con punto extra que causaba error
+if [ -d "./cmd/proxy" ]; then
+  go build -o /usr/local/bin/qovra-proxy ./cmd/proxy/
+else
+  go build -o /usr/local/bin/qovra-proxy .
+fi
+log "qovra-proxy built"
+
+# =============================================================
+section "Step 12 — Building Panel (React)"
+# =============================================================
+cd "$INSTALL_DIR/panel"
+pnpm install --frozen-lockfile
+pnpm build
+log "Panel built → $INSTALL_DIR/panel/dist"
+
+# =============================================================
+section "Step 13 — Installing systemd services"
 # =============================================================
 cat > /etc/systemd/system/qovra-backend.service << EOF
 [Unit]
@@ -583,8 +602,8 @@ Requires=postgresql.service
 [Service]
 Type=simple
 User=root
-WorkingDirectory=${INSTALL_DIR}
-EnvironmentFile=${INSTALL_DIR}/.env
+WorkingDirectory=${INSTALL_DIR}/backend
+EnvironmentFile=${INSTALL_DIR}/backend/.env
 ExecStart=/usr/local/bin/qovra-backend
 Restart=always
 RestartSec=5
@@ -604,8 +623,8 @@ Wants=qovra-backend.service
 [Service]
 Type=simple
 User=root
-WorkingDirectory=${INSTALL_DIR}
-EnvironmentFile=${INSTALL_DIR}/.env
+WorkingDirectory=${INSTALL_DIR}/daemon
+EnvironmentFile=${INSTALL_DIR}/daemon/.env
 ExecStart=/usr/local/bin/qovra-daemon
 Restart=always
 RestartSec=5
@@ -624,8 +643,8 @@ After=network.target qovra-daemon.service
 [Service]
 Type=simple
 User=root
-WorkingDirectory=${INSTALL_DIR}
-EnvironmentFile=${INSTALL_DIR}/.env
+WorkingDirectory=${INSTALL_DIR}/proxy
+EnvironmentFile=${INSTALL_DIR}/proxy/.env
 ExecStart=/usr/local/bin/qovra-proxy
 Restart=always
 RestartSec=5
@@ -642,7 +661,7 @@ systemctl start  qovra-backend qovra-daemon qovra-proxy
 log "All services installed and started"
 
 # =============================================================
-section "Step 12 — Configuring firewall (UFW)"
+section "Step 14 — Configuring firewall (UFW)"
 # =============================================================
 ufw default deny incoming
 ufw default allow outgoing
@@ -654,7 +673,7 @@ ufw --force enable
 log "Firewall configured"
 
 # =============================================================
-section "Step 13 — Verifying services"
+section "Step 15 — Verifying services"
 # =============================================================
 sleep 3
 ALL_OK=true
@@ -684,12 +703,6 @@ echo -e "  ⚙️  Daemon API:       ${YELLOW}http://localhost:${DAEMON_PORT}${N
 echo -e "  🎮 Proxy (QUIC):     ${YELLOW}UDP ${PROXY_PORT}${NC}"
 echo -e "  👤 Admin user:       ${YELLOW}${ADMIN_USERNAME} (${ADMIN_EMAIL})${NC}"
 echo -e "  🖧  Node registered: ${YELLOW}${NODE_HOSTNAME} — ${NODE_RAM_MB}MB RAM${NC}"
-echo ""
-echo -e "  📦 Versions installed:"
-echo -e "     backend  ${YELLOW}${BACKEND_VERSION}${NC}"
-echo -e "     daemon   ${YELLOW}${DAEMON_VERSION}${NC}"
-echo -e "     proxy    ${YELLOW}${PROXY_VERSION}${NC}"
-echo -e "     panel    ${YELLOW}${PANEL_VERSION}${NC}"
 echo ""
 echo -e "  🔐 Credentials:      ${YELLOW}${INSTALL_DIR}/.env${NC}"
 echo ""
