@@ -686,7 +686,7 @@ section "Step 15 — Verifying services"
 sleep 3
 ALL_OK=true
 for SVC in qovra-backend qovra-daemon qovra-proxy; do
-  STATUS=$(systemctl is-active "$SVC")
+  STATUS=$(systemctl is-active "$SVC" || true)
   if [ "$STATUS" = "active" ]; then
     log "$SVC is running"
   else
